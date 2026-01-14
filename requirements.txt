@@ -1,0 +1,7 @@
+customtkinter
+Pillow
+psutil
+scapy
+zstandard
+protobuf
+pyinstaller

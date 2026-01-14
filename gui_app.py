@@ -13,10 +13,62 @@ import os
 import json
 import webbrowser
 from PIL import Image
+import sys
 
-from network_interface_util import get_network_interfaces
-from star_resonance_monitor_core import StarResonanceMonitor
+try:
+    from network_interface_util import get_network_interfaces
+except Exception as e:
+    logging.warning(f"Could not import network_interface_util: {e}. Falling back to dummy interfaces for UI testing.")
+    def get_network_interfaces():
+        # Return a minimal list of interfaces for UI tests when psutil or related packages are missing
+        return [
+            {"name": "lo0", "description": "Loopback (dummy)"},
+            {"name": "eth0", "description": "Ethernet (dummy)"}
+        ]
+try:
+    from star_resonance_monitor_core import StarResonanceMonitor
+except Exception as e:
+    logging.warning(f"Could not import StarResonanceMonitor: {e}. Monitor features disabled (no dummy data will be generated).")
+
+    class StarResonanceMonitor:
+        """Lightweight stub used when the real StarResonanceMonitor cannot be imported.
+
+        This stub does not generate dummy data. It provides the minimal API the UI expects
+        so the application can run without automatic data generation.
+        """
+        def __init__(self, *args, on_data_captured_callback=None, progress_callback=None, on_results_callback=None, **kwargs):
+            self.on_data_captured_callback = on_data_captured_callback
+            self.progress_callback = progress_callback
+            self.on_results_callback = on_results_callback
+            self._stopped = True
+            self._has_data = False
+            self.captured_modules = []
+
+        def start_monitoring(self):
+            # No automatic capture when the real monitor is unavailable.
+            if self.progress_callback:
+                self.progress_callback("Monitor unavailable: install required dependencies to enable capture.")
+
+        def stop_monitoring(self):
+            self._stopped = True
+
+        def rescreen_modules(self, *args, **kwargs):
+            if self.progress_callback:
+                self.progress_callback("Monitor unavailable: cannot rescreen without the real monitor.")
+
+        def has_captured_data(self):
+            return False
 from logging_config import setup_logging
+
+
+def resource_path(rel_path: str) -> str:
+    """Return an absolute path to a resource, working for dev and for PyInstaller bundle.
+
+    Use `getattr(sys, '_MEIPASS', ...)` to find the temporary bundle folder when running
+    from a PyInstaller onefile/onedir executable.
+    """
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel_path)
 
 # --- Log Queue Handler (unchanged) ---
 class QueueHandler(logging.Handler):
@@ -54,10 +106,10 @@ class App(ctk.CTk):
                 "button_active_text": "#202124"    # Texto de botón activo (el color del fondo)
             },
             "font": {
-                "main": ("Segoe UI", 14),
-                "title": ("Segoe UI", 24, "bold"),
-                "subtitle": ("Segoe UI", 16, "bold"),
-                "small": ("Segoe UI", 12)
+                "main": ("Segoe UI", 12),
+                "title": ("Segoe UI", 18, "bold"),
+                "subtitle": ("Segoe UI", 14, "bold"),
+                "small": ("Segoe UI", 10)
             }
         }
         # --- FIN DE TEMA ---
@@ -65,9 +117,13 @@ class App(ctk.CTk):
         self.title("BPSR Module Optimizer by: MrSnake")
         # Aplicar color de fondo a la ventana principal
         self.configure(fg_color=self.THEME["color"]["background_main"])
-        self.iconbitmap("icon.ico")
+        try:
+            self.iconbitmap(resource_path("icon.ico"))
+        except Exception:
+            pass
         self.attributes("-topmost", True)
-        self.geometry("1100x1070")
+        # Slightly smaller, more compact window
+        self.geometry("1000x820")
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # --- Load Icon Font ---
@@ -143,7 +199,7 @@ class App(ctk.CTk):
         title_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         title_frame.grid(row=0, column=0, pady=(5, 2), sticky="w", padx=5)
 
-        app_icon_img = ctk.CTkImage(Image.open("icon.png"), size=(40, 40))
+        app_icon_img = ctk.CTkImage(Image.open(resource_path("icon.png")), size=(40, 40))
         app_icon = ctk.CTkLabel(title_frame, image=app_icon_img, text="")
         app_icon.pack(side="left", padx=(0, 10))
 
@@ -161,17 +217,15 @@ class App(ctk.CTk):
         social_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         social_frame.grid(row=0, column=1, pady=(5, 2), sticky="e")
 
-        kick_img = ctk.CTkImage(Image.open("Icons/kick.png"), size=(24, 24))
+        kick_img = ctk.CTkImage(Image.open(resource_path("Icons/kick.png")), size=(24, 24))
         kick_icon = ctk.CTkLabel(social_frame, image=kick_img, text="", cursor="hand2")
         kick_icon.pack(side="left", padx=2)
         kick_icon.bind("<Button-1>", lambda e: webbrowser.open_new("https://kick.com/mrsnakevt"))
-
-        youtube_img = ctk.CTkImage(Image.open("Icons/youtube.png"), size=(24, 24))
+        youtube_img = ctk.CTkImage(Image.open(resource_path("Icons/youtube.png")), size=(24, 24))
         youtube_icon = ctk.CTkLabel(social_frame, image=youtube_img, text="", cursor="hand2")
         youtube_icon.pack(side="left", padx=2)
         youtube_icon.bind("<Button-1>", lambda e: webbrowser.open_new("https://www.youtube.com/@MrSnake_VT"))
-
-        x_img = ctk.CTkImage(Image.open("Icons/x-twitter.png"), size=(24, 24))
+        x_img = ctk.CTkImage(Image.open(resource_path("Icons/x-twitter.png")), size=(24, 24))
         x_icon = ctk.CTkLabel(social_frame, image=x_img, text="", cursor="hand2")
         x_icon.pack(side="left", padx=2)
         x_icon.bind("<Button-1>", lambda e: webbrowser.open_new("https://x.com/MrSnakeVT"))
@@ -260,6 +314,12 @@ class App(ctk.CTk):
                                                   border_width=0)
         self.delete_preset_button.grid(row=0, column=3, padx=2, pady=2)
 
+        # Hide legacy preset controls (search-only UI preferred)
+        try:
+            self.presets_frame.grid_remove()
+        except Exception:
+            pass
+
         self.attributes_buttons_frame = ctk.CTkFrame(self.filters_frame, fg_color="transparent")
         # Asegurarse de que las 5 columnas internas no se estiren
         for i in range(5): # Para 5 columnas lógicas (0 a 4)
@@ -267,6 +327,12 @@ class App(ctk.CTk):
 
         # Mover attributes_buttons_frame a la fila 2 para eliminar el espacio de la advertencia
         self.attributes_buttons_frame.grid(row=2, column=0, columnspan=4, padx=5, pady=5)
+
+        # Hide legacy attribute pill buttons (we use the search panel instead)
+        try:
+            self.attributes_buttons_frame.grid_remove()
+        except Exception:
+            pass
 
         self.all_attributes = [
             "DMG Stack", "Agile", "Life Condense", "First Aid", "Life Wave", "Life Steal", 
@@ -339,35 +405,113 @@ class App(ctk.CTk):
         self.priority_attrs_container.grid(row=1, column=0, padx=2, pady=2, sticky="ew")
         self.priority_attrs_container.grid_columnconfigure(0, weight=1)
         # This container will hold the ordered list of attributes with up/down/remove buttons
-        self.update_priority_attrs_ui() # Initial call to set visibility
+        # Hide priority ordering UI - removed in simplified search-only design
+        try:
+            self.priority_ordering_frame.grid_remove()
+        except Exception:
+            pass
 
-        # Frame para los botones de control (Start, Stop, Refilter)
+        # --- Search / Advanced Filter UI ---
+        # Provides the user with the ability to add multiple attribute filters and choose sorting
+        self.search_filters: List[Dict[str, Any]] = []  # Each filter: {attr, op, value}
+
+        self.search_frame = ctk.CTkFrame(self.filters_frame, fg_color=self.THEME["color"]["background_secondary"], corner_radius=12)
+        self.search_frame.grid(row=3, column=0, columnspan=5, padx=5, pady=(8,0), sticky="ew")
+        self.search_frame.grid_columnconfigure(0, weight=1)
+
+        # Attribute selector
+        search_attr_values = ["TotalAttributes", "AbilityScore", "OptimizationScore"] + self.all_attributes
+        self.search_attr_menu = ctk.CTkOptionMenu(self.search_frame, values=search_attr_values)
+        self.search_attr_menu.grid(row=0, column=0, padx=6, pady=6, sticky="w")
+        self.search_attr_menu.set("TotalAttributes")
+
+        # Operator selector
+        self.search_op_menu = ctk.CTkOptionMenu(self.search_frame, values=[">=", "<=", ">", "<", "=="]) 
+        self.search_op_menu.grid(row=0, column=1, padx=6, pady=6, sticky="w")
+        self.search_op_menu.set(">=")
+
+        # Value entry
+        self.search_value_entry = ctk.CTkEntry(self.search_frame, width=80)
+        self.search_value_entry.grid(row=0, column=2, padx=6, pady=6, sticky="w")
+        self.search_value_entry.insert(0, "0")
+
+        # Add / Clear buttons
+        add_btn = ctk.CTkButton(self.search_frame, text="Add Filter", width=100, command=self.add_search_filter)
+        add_btn.grid(row=0, column=3, padx=6, pady=6)
+        clear_btn = ctk.CTkButton(self.search_frame, text="Clear Filters", width=100, command=self.clear_search_filters)
+        clear_btn.grid(row=0, column=4, padx=6, pady=6)
+
+        # Container to show active filters
+        self.filters_list_container = ctk.CTkFrame(self.search_frame, fg_color="transparent")
+        self.filters_list_container.grid(row=1, column=0, columnspan=5, padx=6, pady=(0,6), sticky="ew")
+
+        # Sorting controls
+        sort_options = ["Optimization Score", "Combat Power", "Total Attributes"] + self.all_attributes
+        self.sort_by_menu = ctk.CTkOptionMenu(self.search_frame, values=sort_options, command=lambda v: self.apply_filters_and_redisplay())
+        self.sort_by_menu.grid(row=2, column=0, padx=6, pady=6, sticky="w")
+        self.sort_by_menu.set("Optimization Score")
+        self.sort_order_menu = ctk.CTkOptionMenu(self.search_frame, values=["Descending", "Ascending"], command=lambda v: self.apply_filters_and_redisplay()) 
+        self.sort_order_menu.grid(row=2, column=1, padx=6, pady=6, sticky="w")
+        self.sort_order_menu.set("Descending")
+        
+        # (Owned modules feature removed for a slimmer UI)
+
+        # Combination size selector (3 or 4 modules)
+        self.combo_size_menu = ctk.CTkOptionMenu(self.search_frame, values=["3 Modules", "4 Modules"], command=self._on_combo_size_change)
+        self.combo_size_menu.grid(row=2, column=3, padx=6, pady=6, sticky="w")
+        self.combo_size_menu.set("3 Modules")
+        self.combo_size = 3
+        # Track whether the user has explicitly chosen a combo size (defaults set programmatically)
+        self.combo_size_user_selected = False
+        # --- Control buttons (Start, Stop, Refilter, Compute) ---
         self.control_buttons_frame = ctk.CTkFrame(self.main_frame, fg_color="transparent")
         self.control_buttons_frame.grid(row=5, column=0, padx=5, pady=5, sticky="w")
 
-        play_icon = ctk.CTkImage(Image.open("Icons/play.png"), size=(16, 16))
-        self.start_button = ctk.CTkButton(self.control_buttons_frame, text="Start Monitoring", image=play_icon, command=self.start_monitoring,
-                                  corner_radius=8, 
-                                  fg_color="#1F6AA5") # Mantén el azul por ahora o cámbialo a un color de acento
+        play_icon = ctk.CTkImage(Image.open(resource_path("Icons/play.png")), size=(16, 16))
+        self.start_button = ctk.CTkButton(self.control_buttons_frame, text="Start", image=play_icon, command=self.start_monitoring,
+                  corner_radius=6, height=30, width=90,
+                  fg_color="#1F6AA5", border_width=0, state="disabled")
         self.start_button.pack(side="left", padx=5)
 
-        stop_icon = ctk.CTkImage(Image.open("Icons/stop.png"), size=(16, 16))
-        self.stop_button = ctk.CTkButton(self.control_buttons_frame, text="Stop Monitoring", image=stop_icon, command=self.stop_monitoring, state="disabled",
-                                  corner_radius=8, 
-                                  fg_color=self.THEME["color"]["background_secondary"],
-                                  text_color=self.THEME["color"]["text_primary"],
-                                  hover_color=self.THEME["color"]["border"],
-                                  border_width=0)
+        stop_icon = ctk.CTkImage(Image.open(resource_path("Icons/stop.png")), size=(16, 16))
+        self.stop_button = ctk.CTkButton(self.control_buttons_frame, text="Stop", image=stop_icon, command=self.stop_monitoring, state="disabled",
+                      corner_radius=6, height=30, width=90,
+                      fg_color=self.THEME["color"]["background_secondary"],
+                      text_color=self.THEME["color"]["text_primary"],
+                      hover_color=self.THEME["color"]["border"],
+                      border_width=0)
         self.stop_button.pack(side="left", padx=5)
         
-        self.rescreen_button = ctk.CTkButton(self.control_buttons_frame, text="\U00002700 Refiltrar", command=self.rescreen_results, state="disabled", font=self.fa_font,
-                                  corner_radius=8, 
-                                  fg_color=self.THEME["color"]["background_secondary"],
-                                  text_color=self.THEME["color"]["text_primary"],
-                                  hover_color=self.THEME["color"]["border"],
-                                  border_width=1, # Borde blanco
-                                  border_color="white") # Color del borde blanco
+        self.rescreen_button = ctk.CTkButton(self.control_buttons_frame, text="Refilter", command=self.rescreen_results, state="disabled",
+                      corner_radius=6, height=30, width=100,
+                      fg_color=self.THEME["color"]["background_secondary"],
+                      text_color=self.THEME["color"]["text_primary"],
+                      hover_color=self.THEME["color"]["border"],
+                      border_width=0)
         self.rescreen_button.pack(side="left", padx=5)
+
+        # Compute combinations button (runs combinations from captured pool using selected combo_size)
+        self.compute_button = ctk.CTkButton(self.control_buttons_frame, text="Compute", command=self.compute_combinations_from_captured, state="disabled",
+                      corner_radius=6, height=30, width=100,
+                      fg_color="#2E8B57",
+                      text_color=self.THEME["color"]["text_primary"],
+                      border_width=0)
+        self.compute_button.pack(side="left", padx=5)
+
+    def _on_combo_size_change(self, selection: str):
+        try:
+            self.combo_size = 3 if selection.startswith("3") else 4
+        except Exception:
+            self.combo_size = 4
+        # Mark that the user explicitly selected a mode
+        self.combo_size_user_selected = True
+
+        # If we already have captured modules, enable Compute now that user picked size
+        try:
+            if self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
+                self.compute_button.configure(state="normal")
+        except Exception:
+            pass
 
         # --- Dynamic Instructions (movido a la derecha) ---
         self.instruction_frame = ctk.CTkFrame(self.main_frame, fg_color=self.THEME["color"]["background_secondary"], corner_radius=15)
@@ -452,6 +596,25 @@ class App(ctk.CTk):
         self.results_queue = queue.Queue() # Queue for optimization results
         self.module_images = self.load_module_images() # Pre-load module images
         self.attribute_images = self.load_attribute_images() # Pre-load attribute icons
+
+        # Now that critical UI widgets are created, enable the Start button
+        try:
+            if hasattr(self, 'start_button'):
+                self.start_button.configure(state="normal")
+        except Exception:
+            pass
+
+        # --- Module Inventory (compact read-only list) ---
+        # Place inventory as a right-side sidebar; use compact cards and tighter spacing
+        self.inventory_frame = ctk.CTkScrollableFrame(self, label_text="Modules",
+                  fg_color=self.THEME["color"]["background_secondary"],
+                  label_font=(self.THEME["font"]["subtitle"][0], 12),
+                  label_text_color=self.THEME["color"]["text_primary"],
+                  width=260, corner_radius=8)
+        # grid on the right as a sidebar spanning main content rows
+        self.inventory_frame.grid(row=0, column=1, rowspan=9, padx=(6,4), pady=6, sticky="ns")
+        self.inventory_frame.grid_columnconfigure(0, weight=1)
+        self.populate_inventory_list()
 
         # --- Results Display ---
         self.results_frame = ctk.CTkScrollableFrame(self.main_frame, label_text="Combinations",
@@ -574,39 +737,145 @@ class App(ctk.CTk):
     def load_module_images(self) -> Dict[str, ctk.CTkImage]:
         """Loads all module images from the Modulos directory."""
         images = {}
-        image_dir = "Modulos"
+        image_dir = resource_path("Modulos")
         if not os.path.isdir(image_dir):
             logging.warning(f"Image directory '{image_dir}' not found.")
             return images
-        
+
         for filename in os.listdir(image_dir):
             if filename.endswith(".webp"):
                 try:
                     # Match names like "Epic Attack" from "Epic Attack.webp"
                     name = os.path.splitext(filename)[0]
                     filepath = os.path.join(image_dir, filename)
-                    img = Image.open(filepath).resize((60, 60), Image.Resampling.LANCZOS)
-                    images[name] = ctk.CTkImage(light_image=img, dark_image=img, size=(60, 60))
+                    img = Image.open(filepath).resize((48, 48), Image.Resampling.LANCZOS)
+                    images[name] = ctk.CTkImage(light_image=img, dark_image=img, size=(48, 48))
                 except Exception as e:
                     logging.error(f"Failed to load image {filename}: {e}")
         return images
 
+    def populate_inventory_list(self):
+        """Populate the inventory scroll frame with compact module cards.
+
+        Each entry shows a small icon, the module name in bold and a one-line parts summary.
+        """
+        for w in self.inventory_frame.winfo_children():
+            w.destroy()
+
+        names = sorted(list(self.module_images.keys()))
+        if not names:
+            ctk.CTkLabel(self.inventory_frame, text="No module images found.", text_color=self.THEME["color"]["text_secondary"]).pack(padx=8, pady=8)
+            return
+
+        for i, name in enumerate(names):
+            card = ctk.CTkFrame(self.inventory_frame, fg_color=self.THEME["color"]["background_main"], corner_radius=8)
+            card.grid(row=i, column=0, sticky="ew", padx=6, pady=6)
+            card.grid_columnconfigure(1, weight=1)
+
+            img = self.module_images.get(name)
+            if img:
+                lbl_img = ctk.CTkLabel(card, image=img, text="")
+                lbl_img.grid(row=0, column=0, rowspan=2, padx=(8,8), pady=6)
+
+            name_lbl = ctk.CTkLabel(card, text=name, text_color=self.THEME["color"]["text_primary"], font=(self.THEME["font"]["main"][0], 11, "bold"))
+            name_lbl.grid(row=0, column=1, sticky="w", pady=(6,0))
+
+            # compact placeholder for parts (initially empty for image-only list)
+            p_lbl = ctk.CTkLabel(card, text="", text_color=self.THEME["color"]["text_secondary"], font=(self.THEME["font"]["main"][0], 10))
+            p_lbl.grid(row=1, column=1, sticky="w", pady=(0,6))
+
+    def update_inventory_from_solutions(self, solutions: List[Any]):
+        """Build an inventory list from actual captured modules in solutions.
+
+        Each unique module will be shown with its parts (effect name + value) and an Owned checkbox.
+        """
+        # Collect unique modules by uuid if available, otherwise by name
+        modules_map = {}
+        for sol in solutions:
+            for m in getattr(sol, 'modules', []):
+                key = getattr(m, 'uuid', None) or getattr(m, 'name', None)
+                if key not in modules_map:
+                    modules_map[key] = m
+
+        # Rebuild inventory UI
+        for w in self.inventory_frame.winfo_children():
+            w.destroy()
+
+        if not modules_map:
+            ctk.CTkLabel(self.inventory_frame, text="No captured modules.", text_color=self.THEME["color"]["text_secondary"]).pack(padx=8, pady=8)
+            return
+
+        for i, (key, module) in enumerate(sorted(modules_map.items(), key=lambda x: getattr(x[1], 'name', str(x[0])))):
+            card = ctk.CTkFrame(self.inventory_frame, fg_color=self.THEME["color"]["background_main"], corner_radius=8)
+            card.grid(row=i, column=0, sticky="ew", padx=6, pady=6)
+            card.grid_columnconfigure(1, weight=1)
+
+            img = self.module_images.get(getattr(module, 'name', ''))
+            if img:
+                lbl_img = ctk.CTkLabel(card, image=img, text="")
+                lbl_img.grid(row=0, column=0, rowspan=2, padx=(8,8), pady=6)
+
+            title = getattr(module, 'name', f"Module {i}")
+            name_lbl = ctk.CTkLabel(card, text=title, text_color=self.THEME["color"]["text_primary"], font=(self.THEME["font"]["main"][0], 11, "bold"))
+            name_lbl.grid(row=0, column=1, sticky="w", pady=(6,0))
+
+            # Parts displayed compactly on one line
+            parts_text = "  •  ".join(f"{p.name} +{p.value}" for p in getattr(module, 'parts', []))
+            p_lbl = ctk.CTkLabel(card, text=parts_text, text_color=self.THEME["color"]["text_secondary"], font=(self.THEME["font"]["main"][0], 10))
+            p_lbl.grid(row=1, column=1, sticky="w", pady=(0,6))
+
+    def update_inventory_from_captured(self, modules: List[Any]):
+        """Populate inventory UI from a captured module pool (list of module objects)."""
+        modules_map = {}
+        for m in modules:
+            key = getattr(m, 'uuid', None) or getattr(m, 'name', None)
+            if key not in modules_map:
+                modules_map[key] = m
+
+        # Rebuild inventory UI
+        for w in self.inventory_frame.winfo_children():
+            w.destroy()
+
+        if not modules_map:
+            ctk.CTkLabel(self.inventory_frame, text="No captured modules.", text_color=self.THEME["color"]["text_secondary"]).pack(padx=8, pady=8)
+            return
+
+        for i, (key, module) in enumerate(sorted(modules_map.items(), key=lambda x: getattr(x[1], 'name', str(x[0])))):
+            card = ctk.CTkFrame(self.inventory_frame, fg_color=self.THEME["color"]["background_main"], corner_radius=8)
+            card.grid(row=i, column=0, sticky="ew", padx=6, pady=6)
+            card.grid_columnconfigure(1, weight=1)
+
+            img = self.module_images.get(getattr(module, 'name', ''))
+            if img:
+                lbl_img = ctk.CTkLabel(card, image=img, text="")
+                lbl_img.grid(row=0, column=0, rowspan=2, padx=(8,8), pady=6)
+
+            title = getattr(module, 'name', f"Module {i}")
+            name_lbl = ctk.CTkLabel(card, text=title, text_color=self.THEME["color"]["text_primary"], font=(self.THEME["font"]["main"][0], 11, "bold"))
+            name_lbl.grid(row=0, column=1, sticky="w", pady=(6,0))
+
+            parts_text = "  •  ".join(f"{p.name} +{p.value}" for p in getattr(module, 'parts', []))
+            p_lbl = ctk.CTkLabel(card, text=parts_text, text_color=self.THEME["color"]["text_secondary"], font=(self.THEME["font"]["main"][0], 10))
+            p_lbl.grid(row=1, column=1, sticky="w", pady=(0,6))
+
+    # Owned toggling removed to simplify UI
+
     def load_attribute_images(self) -> Dict[str, ctk.CTkImage]:
         """Loads all attribute icon images from the Module-Effects directory."""
         images = {}
-        image_dir = "Module-Effects"
+        image_dir = resource_path("Module-Effects")
         if not os.path.isdir(image_dir):
             logging.warning(f"Image directory '{image_dir}' not found.")
             return images
-        
+
         for filename in os.listdir(image_dir):
             if filename.endswith(".webp"):
                 try:
                     # Match names like "Armor" from "Armor.webp"
                     name = os.path.splitext(filename)[0]
                     filepath = os.path.join(image_dir, filename)
-                    img = Image.open(filepath).resize((18, 18), Image.Resampling.LANCZOS)
-                    images[name] = ctk.CTkImage(light_image=img, dark_image=img, size=(18, 18))
+                    img = Image.open(filepath).resize((14, 14), Image.Resampling.LANCZOS)
+                    images[name] = ctk.CTkImage(light_image=img, dark_image=img, size=(14, 14))
                 except Exception as e:
                     logging.error(f"Failed to load attribute icon {filename}: {e}")
         return images
@@ -738,9 +1007,14 @@ class App(ctk.CTk):
         self.results_frame.grid()
         self.pagination_frame.grid()
         self.instruction_frame.grid_remove() # Hide instructions
-        self.dist_filter_frame.grid() # Show distribution filter
+        # distribution filter is deprecated/hidden
 
         self.all_solutions_cache = solutions
+        # Update inventory view with modules found in received results
+        try:
+            self.update_inventory_from_solutions(solutions)
+        except Exception as e:
+            logging.warning(f"Failed to update inventory from solutions: {e}")
         if self.all_solutions_cache:
             self.rescreen_button.configure(state="normal") # Enable rescreen button if there are solutions
         self.apply_filters_and_redisplay()
@@ -841,15 +1115,15 @@ class App(ctk.CTk):
                                    fg_color=self.THEME["color"]["background_main"], # Fondo neutro
                                    border_width=1,
                                    border_color=color, # Usa el color de rareza en el borde
-                                   corner_radius=10,
-                                   width=190) # Añadir un ancho fijo para que los textos no se ajusten
+                                   corner_radius=8,
+                                   width=160)
                 module_card.grid(row=0, column=j, padx=2, pady=2, sticky="ns")
 
                 img_label = ctk.CTkLabel(module_card, image=self.module_images.get(module.name), text="")
-                img_label.pack(pady=(2, 2), padx=2)
+                img_label.pack(pady=(2, 0), padx=2)
                 
                 attrs_frame = ctk.CTkFrame(module_card, fg_color="transparent")
-                attrs_frame.pack(pady=2, padx=2, anchor="w", fill="x")
+                attrs_frame.pack(pady=(2,4), padx=4, anchor="w", fill="x")
 
                 for part in module.parts:
                     attr_line_frame = ctk.CTkFrame(attrs_frame, fg_color="transparent")
@@ -860,23 +1134,23 @@ class App(ctk.CTk):
                         icon_label = ctk.CTkLabel(attr_line_frame, image=icon, text="")
                         icon_label.pack(side="left", padx=(0, 2))
 
-                    attr_text = f"{part.name}+{part.value}"
+                    attr_text = f"{part.name} +{part.value}"
                     attrs_label = ctk.CTkLabel(attr_line_frame, text=attr_text, 
                                            font=self.THEME["font"]["small"],
                                            text_color=self.THEME["color"]["text_primary"])
                     attrs_label.pack(side="left")
 
-            stats_frame = ctk.CTkFrame(content_frame)
-            stats_frame.grid(row=1, column=0, pady=5, sticky="nsew")
+            stats_frame = ctk.CTkFrame(content_frame, fg_color="transparent")
+            stats_frame.grid(row=1, column=0, pady=(4,6), sticky="nsew")
 
-            ctk.CTkLabel(stats_frame, text="Attribute Distribution:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=5, pady=(2, 1))
+            ctk.CTkLabel(stats_frame, text="Attr Distribution:", font=self.THEME["font"]["small"], text_color=self.THEME["color"]["text_secondary"]).pack(anchor="w", padx=4, pady=(2, 1))
             
             attr_dist_frame = ctk.CTkFrame(stats_frame, fg_color="transparent")
-            attr_dist_frame.pack(anchor="w", padx=5, pady=1, fill="x")
+            attr_dist_frame.pack(anchor="w", padx=4, pady=1, fill="x")
 
             # Sort attributes by value (Lv) in descending order
             for attr_name, value in sorted(solution.attr_breakdown.items(), key=lambda item: item[1], reverse=True):
-                level_str = "(Lv.0)"
+                level_str = "(Lv0)"
                 if value >= 20: level_str = "(Lv.6)"
                 elif value >= 16: level_str = "(Lv.5)"
                 elif value >= 12: level_str = "(Lv.4)"
@@ -893,7 +1167,7 @@ class App(ctk.CTk):
                     icon_label.pack(side="left", padx=(0, 3))
 
                 attr_dist_text = f"{attr_name} {level_str}: +{value}"
-                ctk.CTkLabel(attr_line_frame, text=attr_dist_text, font=("Segoe UI", 11), justify="left").pack(side="left")
+                ctk.CTkLabel(attr_line_frame, text=attr_dist_text, font=self.THEME["font"]["small"], justify="left", text_color=self.THEME["color"]["text_primary"]).pack(side="left")
 
     def set_distribution_filter(self, filter_name: str):
         """Sets the distribution filter and re-applies it to the cached results."""
@@ -914,40 +1188,117 @@ class App(ctk.CTk):
             else:
                 button.configure(fg_color=default_color)
 
+    # --- Search / Filter Helpers ---
+    def add_search_filter(self):
+        """Add a filter from the search controls to the active filter list and refresh UI."""
+        attr = self.search_attr_menu.get()
+        op = self.search_op_menu.get()
+        val_str = self.search_value_entry.get().strip()
+        try:
+            val = int(val_str)
+        except ValueError:
+            try:
+                val = float(val_str)
+            except ValueError:
+                logging.warning("Filter value must be numeric")
+                return
+
+        f = {"attr": attr, "op": op, "value": val}
+        self.search_filters.append(f)
+        self._rebuild_filters_list_ui()
+        self.apply_filters_and_redisplay()
+
+    def clear_search_filters(self):
+        self.search_filters.clear()
+        self._rebuild_filters_list_ui()
+        self.apply_filters_and_redisplay()
+
+    def remove_search_filter(self, index: int):
+        if 0 <= index < len(self.search_filters):
+            del self.search_filters[index]
+            self._rebuild_filters_list_ui()
+            self.apply_filters_and_redisplay()
+
+    def _rebuild_filters_list_ui(self):
+        for w in self.filters_list_container.winfo_children():
+            w.destroy()
+        for idx, f in enumerate(self.search_filters):
+            txt = f"{f['attr']} {f['op']} {f['value']}"
+            row_frame = ctk.CTkFrame(self.filters_list_container, fg_color="transparent")
+            row_frame.grid(row=idx, column=0, sticky="ew", pady=2)
+            row_frame.grid_columnconfigure(0, weight=1)
+            lbl = ctk.CTkLabel(row_frame, text=txt, text_color=self.THEME["color"]["text_primary"])
+            lbl.grid(row=0, column=0, sticky="w")
+            rem = ctk.CTkButton(row_frame, text="Remove", width=70, command=lambda i=idx: self.remove_search_filter(i))
+            rem.grid(row=0, column=1, padx=4)
+
+    def _filter_match(self, solution: Any, f: Dict[str, Any]) -> bool:
+        # determine the value to compare based on attribute name
+        attr = f["attr"]
+        op = f["op"]
+        target = f["value"]
+        # fetch value
+        if attr == "TotalAttributes":
+            val = sum(solution.attr_breakdown.values())
+        elif attr == "AbilityScore":
+            val = getattr(solution, 'score', 0) or 0
+        elif attr == "OptimizationScore":
+            val = getattr(solution, 'optimization_score', 0) or 0
+        else:
+            val = solution.attr_breakdown.get(attr, 0)
+
+        try:
+            if op == ">=":
+                return val >= target
+            if op == "<=":
+                return val <= target
+            if op == ">":
+                return val > target
+            if op == "<":
+                return val < target
+            if op == "==":
+                return val == target
+        except Exception:
+            return False
+        return False
+
+    def _apply_search_and_sort(self, solutions: List[Any]) -> List[Any]:
+        # Ignore legacy distribution filters: operate on supplied solutions only.
+        filtered = list(solutions)
+
+        # Apply search filters (AND semantics)
+        if self.search_filters:
+            filtered = [s for s in filtered if all(self._filter_match(s, f) for f in self.search_filters)]
+        sort_by = self.sort_by_menu.get()
+        reverse = True if self.sort_order_menu.get() == "Descending" else False
+
+        def sort_key(sol: Any):
+            if sort_by == "Optimization Score":
+                return getattr(sol, 'optimization_score', 0) or 0
+            if sort_by == "Combat Power":
+                return getattr(sol, 'score', 0) or 0
+            if sort_by == "Total Attributes":
+                return sum(sol.attr_breakdown.values())
+            # otherwise an attribute name
+            return sol.attr_breakdown.get(sort_by, 0)
+
+        try:
+            filtered.sort(key=sort_key, reverse=reverse)
+        except Exception as e:
+            logging.warning(f"Sorting failed: {e}")
+
+        return filtered
+
     def apply_filters_and_redisplay(self):
         """Filters the all_solutions_cache based on current filters and updates the display."""
         if not self.all_solutions_cache:
             self.solutions_cache = []
             self.display_current_page() # Show "No results"
             return
-
-        if self.distribution_filter == "All":
-            filtered_solutions = self.all_solutions_cache
-        else:
-            filtered_solutions = []
-            for solution in self.all_solutions_cache:
-                lv5_count = 0
-                lv6_count = 0
-                for value in solution.attr_breakdown.values():
-                    if value >= 20:
-                        lv6_count += 1
-                    elif value >= 16:
-                        lv5_count += 1
-                
-                match = False
-                if self.distribution_filter == "Lv.5" and lv5_count >= 1 and lv6_count == 0:
-                    match = True
-                elif self.distribution_filter == "Lv.5/Lv.5" and lv5_count >= 2:
-                    match = True
-                elif self.distribution_filter == "Lv.5/Lv.6" and lv5_count >= 1 and lv6_count >= 1:
-                    match = True
-                elif self.distribution_filter == "Lv.6/Lv.6" and lv6_count >= 2:
-                    match = True
-                
-                if match:
-                    filtered_solutions.append(solution)
-
-        self.solutions_cache = filtered_solutions
+        # Simplified: ignore distribution filter and show all combinations that match search/ownership
+        filtered_solutions = list(self.all_solutions_cache)
+        # Then apply advanced search filters and sorting
+        self.solutions_cache = self._apply_search_and_sort(filtered_solutions)
         self.current_page = 0
         self.display_current_page()
 
@@ -1161,9 +1512,10 @@ class App(ctk.CTk):
         
         interface_name = self.interface_map[selected_interface_display]
         category = self.category_menu.get()
-        attributes = list(self.selected_attributes)
-        prioritized_attrs = self.ordered_prioritized_attrs if self.priority_order_checkbox.get() == 1 else []
-        priority_order_mode = self.priority_order_checkbox.get() == 1
+        # Simplified: no attribute priority or pill-based attribute filtering — use search UI only
+        attributes = []
+        prioritized_attrs = []
+        priority_order_mode = False
 
         self.log_textbox.configure(state="normal")
         self.log_textbox.delete("1.0", "end")
@@ -1196,6 +1548,11 @@ class App(ctk.CTk):
             progress_callback=self.progress_callback,
             on_results_callback=self.results_callback # Pass results callback
         )
+        # Inform monitor of desired combination size if supported
+        try:
+            setattr(self.monitor_instance, 'combo_size', getattr(self, 'combo_size', 4))
+        except Exception:
+            pass
         
         self.monitor_thread = threading.Thread(target=self.monitor_instance.start_monitoring, daemon=True)
         self.monitor_thread.start()
@@ -1234,8 +1591,9 @@ class App(ctk.CTk):
 
     def rescreen_results(self):
         """Rescreens existing data"""
-        if not self.monitor_instance or not self.monitor_instance.has_captured_data():
-            logging.warning("No captured module data available for rescreening.")
+        # Compute combinations from captured pool (do not re-capture)
+        if not self.monitor_instance or not getattr(self.monitor_instance, 'captured_modules', None):
+            logging.warning("No captured module data available for computing combinations.")
             return
 
         # Clear cache and show loading animation
@@ -1246,24 +1604,97 @@ class App(ctk.CTk):
         self.instruction_frame.grid_remove() # Hide instructions
         self.loading_frame.grid(row=8, column=0, columnspan=2, padx=10, pady=10, sticky="nsew")
         self.start_animation()
-        
-        category = self.category_menu.get()
-        attributes = list(self.selected_attributes)
-        prioritized_attrs = self.ordered_prioritized_attrs if self.priority_order_checkbox.get() == 1 else []
-        priority_order_mode = self.priority_order_checkbox.get() == 1
-        
-        logging.info("=== User requested rescreening with new conditions... ===")
-        
-        threading.Thread(
-            target=self.monitor_instance.rescreen_modules,
-            args=(category, attributes, prioritized_attrs, priority_order_mode),
-            daemon=True
-        ).start()
+
+        # compute in background
+        threading.Thread(target=self.compute_combinations_from_captured, daemon=True).start()
     
     def enable_rescreening(self):
-        """Callback function to enable the "Rescreen" button"""
+        """Callback function to enable the "Rescreen" button
+
+        If `modules` is provided (a list of captured module objects), update the inventory
+        from that captured pool. Otherwise, just enable rescreen/compute controls.
+        """
+        # if a modules list was passed, update inventory (capture time)
+        def _do_update(mods):
+            try:
+                self.update_inventory_from_captured(mods)
+            except Exception as e:
+                logging.warning(f"Failed to update inventory from captured pool: {e}")
+
+        # accept optional positional arg
+        try:
+            import inspect
+            params = inspect.getfullargspec(self.enable_rescreening)
+        except Exception:
+            params = None
+
+        # Enable UI controls
         self.rescreen_button.configure(state="normal")
         self.status_label.configure(text="Status: Data captured, ready to rescreen.")
+
+        # If monitor_instance has captured_modules, update inventory now
+        try:
+            if self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
+                _do_update(self.monitor_instance.captured_modules)
+        except Exception:
+            pass
+
+        # If the user already chose combo size before/after capture, enable Compute now
+        try:
+            if getattr(self, 'combo_size_user_selected', False) and self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
+                self.compute_button.configure(state="normal")
+        except Exception:
+            pass
+
+    def compute_combinations_from_captured(self):
+        """Generate combinations from captured modules according to `self.combo_size`.
+
+        This runs in the main thread when invoked by button, or in a background thread.
+        """
+        try:
+            pool = None
+            if self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
+                pool = list(self.monitor_instance.captured_modules)
+            else:
+                pool = []
+
+            if not pool:
+                logging.warning("No captured modules available to compute combinations.")
+                return
+
+            import random
+            combos = set()
+            solutions = []
+            target_size = getattr(self, 'combo_size', 4)
+            max_attempts = 1000
+            attempts = 0
+            while len(solutions) < 200 and attempts < max_attempts:
+                attempts += 1
+                chosen = tuple(sorted(random.sample(pool, k=target_size), key=lambda m: getattr(m, 'uuid', getattr(m, 'name', ''))))
+                combo_id = tuple(getattr(m, 'uuid', getattr(m, 'name', '')) for m in chosen)
+                if combo_id in combos:
+                    continue
+                combos.add(combo_id)
+
+                # build solution-like object
+                attr_breakdown = {}
+                for m in chosen:
+                    for p in m.parts:
+                        attr_breakdown[p.name] = attr_breakdown.get(p.name, 0) + p.value
+
+                sol = type('S', (), {})()
+                sol.modules = list(chosen)
+                sol.attr_breakdown = attr_breakdown
+                sol.optimization_score = sum(attr_breakdown.values())
+                sol.score = int(sol.optimization_score * 1.1)
+                solutions.append(sol)
+
+            # push results to UI via the results callback
+            self.results_callback(solutions)
+            self.stop_animation()
+        except Exception as e:
+            logging.error(f"Error computing combinations: {e}")
+            self.stop_animation()
         
     def on_closing(self):
         self.stop_monitoring()
