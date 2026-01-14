@@ -8,10 +8,13 @@ import threading
 from typing import Optional, Dict, List, Any
 import queue
 import logging
+import re
 import sys
 import os
 import json
 import webbrowser
+from module_optimizer import ModuleOptimizer
+from module_types import ModuleCategory
 from PIL import Image
 import sys
 
@@ -131,6 +134,7 @@ class App(ctk.CTk):
 
         self.monitor_thread: Optional[threading.Thread] = None
         self.monitor_instance: Optional[StarResonanceMonitor] = None
+        self.module_optimizer = ModuleOptimizer()
         self.interfaces = get_network_interfaces()
         self.interface_map = {f"{i}: {iface.get('description', iface['name'])}": iface['name'] 
                               for i, iface in enumerate(self.interfaces)}
@@ -584,6 +588,10 @@ class App(ctk.CTk):
         self.status_frame.grid(row=1, column=0, columnspan=2, padx=5, pady=(0, 5), sticky="ew")
         self.status_label = ctk.CTkLabel(self.status_frame, text="Status: Idle", anchor="w", text_color=self.THEME["color"]["text_secondary"], font=self.THEME["font"]["main"])
         self.status_label.pack(side="left", padx=5, pady=1)
+        self.progress_bar = ctk.CTkProgressBar(self.status_frame, width=200, height=15)
+        self.progress_bar.pack(side="right", padx=5, pady=1)
+        self.progress_bar.set(0)
+        self.progress_bar.pack_forget()  # Initially hidden
 
         self.log_queue = queue.Queue()
         logger_instance = logging.getLogger()
@@ -968,6 +976,19 @@ class App(ctk.CTk):
             try:
                 message = self.progress_queue.get(block=False)
                 self.status_label.configure(text=f"Status: {message}")
+                # Update progress bar
+                if "Evaluating" in message and "combinations" in message:
+                    self.progress_bar.pack(side="right", padx=5, pady=1)
+                    self.progress_bar.set(0)
+                elif "Evaluated" in message and "/" in message:
+                    match = re.search(r'Evaluated (\d+)/(\d+) combinations', message)
+                    if match:
+                        current = int(match.group(1))
+                        total = int(match.group(2))
+                        progress = current / total
+                        self.progress_bar.set(progress)
+                elif "Completed!" in message:
+                    self.progress_bar.pack_forget()
             except queue.Empty:
                 break
         
@@ -975,7 +996,12 @@ class App(ctk.CTk):
         while True:
             try:
                 results = self.results_queue.get(block=False)
-                self.update_results_display(results)
+                if results and hasattr(results[0], 'optimization_score'):
+                    # This is optimization results (ModuleSolution list)
+                    self.update_results_display(results)
+                else:
+                    # This is captured modules (ModuleInfo list)
+                    self.store_captured_modules(results)
             except queue.Empty:
                 break
                 
@@ -1018,6 +1044,12 @@ class App(ctk.CTk):
         if self.all_solutions_cache:
             self.rescreen_button.configure(state="normal") # Enable rescreen button if there are solutions
         self.apply_filters_and_redisplay()
+
+    def store_captured_modules(self, results: List[Any]):
+        """Stores captured modules and enables Compute button."""
+        self.captured_modules = results
+        self.compute_button.configure(state="normal")
+        self.status_label.configure(text=f"Status: {len(self.captured_modules)} modules captured. Press Compute to calculate combinations.")
 
     def display_current_page(self):
         """Clears and rebuilds the results display for the current page."""
@@ -1647,54 +1679,31 @@ class App(ctk.CTk):
             pass
 
     def compute_combinations_from_captured(self):
-        """Generate combinations from captured modules according to `self.combo_size`.
+        """Compute all combinations from captured modules."""
+        if not hasattr(self, 'captured_modules') or not self.captured_modules:
+            self.status_label.configure(text="Status: No modules captured.")
+            return
 
-        This runs in the main thread when invoked by button, or in a background thread.
-        """
-        try:
-            pool = None
-            if self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
-                pool = list(self.monitor_instance.captured_modules)
-            else:
-                pool = []
+        # Run optimization in background thread
+        def run_optimization():
+            try:
+                solutions = self.module_optimizer.get_optimal_solutions(
+                    self.captured_modules,
+                    category=ModuleCategory.All,
+                    top_n=1000,  # Large number to get many results
+                    prioritized_attrs=None,
+                    priority_order_mode=False,
+                    all_combinations=True,
+                    combo_size=self.combo_size,
+                    progress_callback=self.progress_callback
+                )
+                # Put results in queue for main thread
+                self.results_queue.put(solutions)
+            except Exception as e:
+                logging.error(f"Optimization failed: {e}")
+                self.progress_callback("Optimization failed.")
 
-            if not pool:
-                logging.warning("No captured modules available to compute combinations.")
-                return
-
-            import random
-            combos = set()
-            solutions = []
-            target_size = getattr(self, 'combo_size', 4)
-            max_attempts = 1000
-            attempts = 0
-            while len(solutions) < 200 and attempts < max_attempts:
-                attempts += 1
-                chosen = tuple(sorted(random.sample(pool, k=target_size), key=lambda m: getattr(m, 'uuid', getattr(m, 'name', ''))))
-                combo_id = tuple(getattr(m, 'uuid', getattr(m, 'name', '')) for m in chosen)
-                if combo_id in combos:
-                    continue
-                combos.add(combo_id)
-
-                # build solution-like object
-                attr_breakdown = {}
-                for m in chosen:
-                    for p in m.parts:
-                        attr_breakdown[p.name] = attr_breakdown.get(p.name, 0) + p.value
-
-                sol = type('S', (), {})()
-                sol.modules = list(chosen)
-                sol.attr_breakdown = attr_breakdown
-                sol.optimization_score = sum(attr_breakdown.values())
-                sol.score = int(sol.optimization_score * 1.1)
-                solutions.append(sol)
-
-            # push results to UI via the results callback
-            self.results_callback(solutions)
-            self.stop_animation()
-        except Exception as e:
-            logging.error(f"Error computing combinations: {e}")
-            self.stop_animation()
+        threading.Thread(target=run_optimization, daemon=True).start()
         
     def on_closing(self):
         self.stop_monitoring()

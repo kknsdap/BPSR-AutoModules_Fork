@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import math
+import itertools
 from typing import Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass, field
 from copy import deepcopy
@@ -45,9 +46,9 @@ class ModuleSolution:
 # These functions are defined at the top level so they can be "pickled" by the multiprocessing module.
 
 def calculate_fitness(modules: List[ModuleInfo], category: ModuleCategory,
-                      prioritized_attrs: Optional[List[str]] = None) -> float:
+                      prioritized_attrs: Optional[List[str]] = None, combo_size: int = 4) -> float:
     """Independent fitness calculation function."""
-    if not modules or len(set(m.uuid for m in modules)) < 4: return 0.0
+    if not modules or len(set(m.uuid for m in modules)) < combo_size: return 0.0
     attr_breakdown = {}
     for module in modules:
         for part in module.parts:
@@ -511,7 +512,8 @@ class ModuleOptimizer:
 
     def get_optimal_solutions(self, modules: List[ModuleInfo], category: ModuleCategory = ModuleCategory.All,
                            top_n: int = 40, prioritized_attrs: Optional[List[str]] = None,
-                           priority_order_mode: bool = False,
+                           priority_order_mode: bool = False, all_combinations: bool = False,
+                           combo_size: int = 4,
                            progress_callback: Optional[Callable[[str], None]] = None) -> List[ModuleSolution]:
         """
         Optimizes modules and returns a list of solutions instead of printing them.
@@ -522,7 +524,10 @@ class ModuleOptimizer:
         print(title); self._log_result(title)
         print(separator); self._log_result(separator)
         
-        optimal_solutions = self.optimize_modules(modules, category, top_n, prioritized_attrs, priority_order_mode, progress_callback)
+        if all_combinations:
+            optimal_solutions = self.get_all_combinations(modules, category, prioritized_attrs, combo_size, progress_callback)
+        else:
+            optimal_solutions = self.optimize_modules(modules, category, top_n, prioritized_attrs, priority_order_mode, progress_callback)
 
         if not optimal_solutions:
             msg = f"No valid combinations found that meet all filtering criteria.\nHint: Please check if the filtering attributes are too strict, or if the module pool lacks modules that meet the requirements."
@@ -534,3 +539,52 @@ class ModuleOptimizer:
         
         print(separator); self._log_result(separator)
         return optimal_solutions
+
+    def get_all_combinations(self, modules: List[ModuleInfo], category: ModuleCategory,
+                             prioritized_attrs: Optional[List[str]] = None, combo_size: int = 4,
+                             progress_callback: Optional[Callable[[str], None]] = None) -> List[ModuleSolution]:
+        """
+        Generate and evaluate all possible combinations of the specified size.
+        """
+        self.logger.info(f"Generating all possible combinations for {category.value} type modules")
+        module_pool = modules if category == ModuleCategory.All else [m for m in modules if self.get_module_category(m) == category]
+        
+        if prioritized_attrs:
+            self.logger.info(f"Applying inclusive filtering: keeping modules that have at least one of the desired attributes: {prioritized_attrs}.")
+            original_count = len(module_pool)
+            prioritized_set = set(prioritized_attrs)
+            module_pool = [m for m in module_pool if any(p.name in prioritized_set for p in m.parts)]
+            self.logger.info(f"Inclusive filtering completed: module count reduced from {original_count} to {len(module_pool)}.")
+
+        if len(module_pool) < combo_size:
+            self.logger.warning(f"Less than {combo_size} modules, unable to form valid combinations.")
+            return []
+
+        all_solutions = []
+        total_combinations = math.comb(len(module_pool), combo_size)
+        self.logger.info(f"Total combinations to evaluate: {total_combinations}")
+
+        if progress_callback:
+            progress_callback(f"Evaluating {total_combinations} combinations...")
+
+        count = 0
+        for combo in itertools.combinations(module_pool, combo_size):
+            combo_list = list(combo)
+            fitness = calculate_fitness(combo_list, category, prioritized_attrs, combo_size)
+            if fitness > 0:  # Only include valid combinations
+                solution = ModuleSolution(modules=combo_list, optimization_score=fitness)
+                solution.score, solution.attr_breakdown = self.calculate_combat_power(solution.modules)
+                all_solutions.append(solution)
+            
+            count += 1
+            if count % 1000 == 0 and progress_callback:
+                progress_callback(f"Evaluated {count}/{total_combinations} combinations...")
+
+        # Sort by optimization score descending
+        all_solutions.sort(key=lambda s: s.optimization_score, reverse=True)
+        
+        self.logger.info(f"All combinations evaluated. Found {len(all_solutions)} valid combinations.")
+        if progress_callback:
+            progress_callback(f"Completed! Found {len(all_solutions)} valid combinations.")
+        
+        return all_solutions
