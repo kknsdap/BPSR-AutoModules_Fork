@@ -145,6 +145,7 @@ class App(ctk.CTk):
         self.distribution_filter = "All" # Current distribution filter
         self.current_page = 0
         self.results_per_page = 4 # Show 4 results per page
+        self.captured_modules: List[Any] = [] # Holds captured modules from network
         
         # Main grid configuration for content and side console
         self.grid_columnconfigure(0, weight=1) # Column for main content
@@ -707,6 +708,8 @@ class App(ctk.CTk):
 
     def update_dynamic_instruction(self):
         # Clear previous widgets
+        if not hasattr(self, 'instruction_text_frame'):
+            return
         for widget in self.instruction_text_frame.winfo_children():
             widget.destroy()
 
@@ -996,13 +999,20 @@ class App(ctk.CTk):
         while True:
             try:
                 results = self.results_queue.get(block=False)
-                if results and hasattr(results[0], 'optimization_score'):
-                    # This is optimization results (ModuleSolution list)
-                    self.update_results_display(results)
-                else:
-                    # This is captured modules (ModuleInfo list)
-                    self.store_captured_modules(results)
+                logging.debug(f"Received results from queue: type={type(results)}, length={len(results) if isinstance(results, list) else 'N/A'}")
+                if results and isinstance(results, list) and len(results) > 0:
+                    if hasattr(results[0], 'optimization_score'):
+                        # This is optimization results (ModuleSolution list)
+                        logging.debug(f"Received ModuleSolution results: {len(results)} items")
+                        self.update_results_display(results)
+                    else:
+                        # This is captured modules (ModuleInfo list)
+                        logging.debug(f"Received ModuleInfo results: {len(results)} items")
+                        self.store_captured_modules(results)
             except queue.Empty:
+                break
+            except Exception as e:
+                logging.error(f"Error processing results queue: {e}", exc_info=True)
                 break
                 
         self.after(100, self.poll_queues)
@@ -1047,14 +1057,25 @@ class App(ctk.CTk):
 
     def store_captured_modules(self, results: List[Any]):
         """Stores captured modules and enables Compute button."""
-        self.captured_modules = results
-        self.compute_button.configure(state="normal")
-        self.status_label.configure(text=f"Status: {len(self.captured_modules)} modules captured. Press Compute to calculate combinations.")
+        if results and isinstance(results, list):
+            self.captured_modules = results
+            logging.info(f"Captured {len(self.captured_modules)} modules")
+            self.compute_button.configure(state="normal")
+            self.status_label.configure(text=f"Status: {len(self.captured_modules)} modules captured. Press Compute to calculate combinations.")
+        else:
+            logging.warning(f"Invalid results received: {results}")
+            self.status_label.configure(text="Status: Failed to capture modules.")
 
     def display_current_page(self):
         """Clears and rebuilds the results display for the current page."""
-        for widget in self.results_frame.winfo_children():
-            widget.destroy()
+        try:
+            for widget in self.results_frame.winfo_children():
+                try:
+                    widget.destroy()
+                except Exception as e:
+                    logging.debug(f"Could not destroy widget: {e}")
+        except Exception as e:
+            logging.debug(f"Error clearing results frame: {e}")
 
         if not self.solutions_cache:
             self.pagination_frame.grid_remove()
@@ -1349,7 +1370,7 @@ class App(ctk.CTk):
 
     def stop_animation(self):
         """Stops the loading animation."""
-        if self._animation_job:
+        if hasattr(self, '_animation_job') and self._animation_job:
             self.after_cancel(self._animation_job)
             self._animation_job = None
 
@@ -1369,7 +1390,7 @@ class App(ctk.CTk):
 
     def stop_instruction_animation(self):
         """Stops the instruction animation."""
-        if self.instruction_animation_job:
+        if hasattr(self, 'instruction_animation_job') and self.instruction_animation_job:
             self.after_cancel(self.instruction_animation_job)
             self.instruction_animation_job = None
 
@@ -1589,12 +1610,18 @@ class App(ctk.CTk):
         self.monitor_thread = threading.Thread(target=self.monitor_instance.start_monitoring, daemon=True)
         self.monitor_thread.start()
 
-        self.start_button.configure(state="disabled")
-        self.stop_button.configure(state="normal")
-        self.interface_menu.configure(state="disabled")
-        self.category_menu.configure(state="normal")
-        self.rescreen_button.configure(state="disabled")
-        self.status_label.configure(text="Status: Monitoring game data...")
+        if hasattr(self, 'start_button'):
+            self.start_button.configure(state="disabled")
+        if hasattr(self, 'stop_button'):
+            self.stop_button.configure(state="normal")
+        if hasattr(self, 'interface_menu'):
+            self.interface_menu.configure(state="disabled")
+        if hasattr(self, 'category_menu'):
+            self.category_menu.configure(state="normal")
+        if hasattr(self, 'rescreen_button'):
+            self.rescreen_button.configure(state="disabled")
+        if hasattr(self, 'status_label'):
+            self.status_label.configure(text="Status: Monitoring game data...")
 
     def stop_monitoring(self):
         if self.monitor_instance:
@@ -1605,21 +1632,33 @@ class App(ctk.CTk):
         self.monitor_instance = None
         self.monitor_thread = None
 
-        self.start_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
-        self.interface_menu.configure(state="normal")
-        self.category_menu.configure(state="normal") # Category menu should be enabled after stopping
-        self.rescreen_button.configure(state="disabled")
-        self.status_label.configure(text="Status: Idle")
-        self.dist_filter_frame.grid_remove() # Hide distribution filter
+        if hasattr(self, 'start_button'):
+            self.start_button.configure(state="normal")
+        if hasattr(self, 'stop_button'):
+            self.stop_button.configure(state="disabled")
+        if hasattr(self, 'interface_menu'):
+            self.interface_menu.configure(state="normal")
+        if hasattr(self, 'category_menu'):
+            self.category_menu.configure(state="normal")
+        if hasattr(self, 'rescreen_button'):
+            self.rescreen_button.configure(state="disabled")
+        if hasattr(self, 'status_label'):
+            self.status_label.configure(text="Status: Idle")
+        if hasattr(self, 'dist_filter_frame'):
+            self.dist_filter_frame.grid_remove() # Hide distribution filter
         self.stop_instruction_animation()
 
         # Reset instruction label to initial state
-        self.instruction_label_simple.pack_forget()
-        self.update_dynamic_instruction() # Re-create the initial instruction in the correct language
-        self.instruction_text_frame.pack(side="left", padx=(0, 10), pady=5)
-        self.instruction_icon.configure(text="⚠️", text_color="#FFCC00") # Yellow warning
-        self.instruction_frame.grid()
+        if hasattr(self, 'instruction_label_simple'):
+            self.instruction_label_simple.pack_forget()
+        if hasattr(self, 'update_dynamic_instruction'):
+            self.update_dynamic_instruction() # Re-create the initial instruction in the correct language
+        if hasattr(self, 'instruction_text_frame'):
+            self.instruction_text_frame.pack(side="left", padx=(0, 10), pady=5)
+        if hasattr(self, 'instruction_icon'):
+            self.instruction_icon.configure(text="⚠️", text_color="#FFCC00") # Yellow warning
+        if hasattr(self, 'instruction_frame'):
+            self.instruction_frame.grid()
 
     def rescreen_results(self):
         """Rescreens existing data"""
@@ -1672,17 +1711,20 @@ class App(ctk.CTk):
             pass
 
         # If the user already chose combo size before/after capture, enable Compute now
+        # Default to enabling Compute since combo_size defaults to 3
         try:
-            if getattr(self, 'combo_size_user_selected', False) and self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
+            if self.monitor_instance and getattr(self.monitor_instance, 'captured_modules', None):
                 self.compute_button.configure(state="normal")
         except Exception:
             pass
 
     def compute_combinations_from_captured(self):
         """Compute all combinations from captured modules."""
-        if not hasattr(self, 'captured_modules') or not self.captured_modules:
-            self.status_label.configure(text="Status: No modules captured.")
+        if not self.captured_modules:
+            logging.warning(f"No modules captured. captured_modules={self.captured_modules}")
+            self.status_label.configure(text="Status: No modules captured. Please start monitoring and capture data first.")
             return
+        logging.info(f"Starting computation with {len(self.captured_modules)} modules, combo_size={self.combo_size}")
 
         # Run optimization in background thread
         def run_optimization():

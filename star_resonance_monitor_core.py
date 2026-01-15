@@ -68,11 +68,11 @@ class StarResonanceMonitor:
                         self.captured_modules = all_modules
                         print(f"Successfully parsed and stored {len(self.captured_modules)} modules.")
                         
-                        # Perform initial screening
-                        self.rescreen_modules(self.initial_category, self.initial_attributes,
-                                               self.initial_prioritized_attrs, self.initial_priority_order_mode)
+                        # Pass captured modules to GUI via on_results_callback
+                        if self.on_results_callback:
+                            self.on_results_callback(self.captured_modules)
                         
-                        # Notify GUI to enable "Rescreen" button
+                        # Also notify GUI to enable "Rescreen" and "Compute" buttons
                         if self.on_data_captured_callback:
                             self.on_data_captured_callback()
                     else:

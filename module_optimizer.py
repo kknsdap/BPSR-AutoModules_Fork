@@ -231,6 +231,9 @@ class ModuleOptimizer:
         self.quality_threshold = 12
         self.prefilter_top_n_per_attr = 60
         self.prefilter_top_n_total_value = 100
+        
+        # Cache for all calculated combinations (database)
+        self.all_solutions_cache: Dict[Tuple, List[ModuleSolution]] = {}  # Key: (category, combo_size), Value: list of solutions
 
     def _get_current_log_file(self) -> Optional[str]:
         try:
@@ -517,6 +520,7 @@ class ModuleOptimizer:
                            progress_callback: Optional[Callable[[str], None]] = None) -> List[ModuleSolution]:
         """
         Optimizes modules and returns a list of solutions instead of printing them.
+        If all_combinations is True, generates and evaluates all possible combinations.
         """
         separator = f"\n{'='*50}"
         print(separator); self._log_result(separator)
@@ -545,46 +549,72 @@ class ModuleOptimizer:
                              progress_callback: Optional[Callable[[str], None]] = None) -> List[ModuleSolution]:
         """
         Generate and evaluate all possible combinations of the specified size.
+        Results are cached for efficient filtering without recalculation.
         """
-        self.logger.info(f"Generating all possible combinations for {category.value} type modules")
-        module_pool = modules if category == ModuleCategory.All else [m for m in modules if self.get_module_category(m) == category]
+        self.logger.info(f"Generating all possible combinations for {category.value} type modules (size: {combo_size})")
         
-        if prioritized_attrs:
-            self.logger.info(f"Applying inclusive filtering: keeping modules that have at least one of the desired attributes: {prioritized_attrs}.")
-            original_count = len(module_pool)
-            prioritized_set = set(prioritized_attrs)
-            module_pool = [m for m in module_pool if any(p.name in prioritized_set for p in m.parts)]
-            self.logger.info(f"Inclusive filtering completed: module count reduced from {original_count} to {len(module_pool)}.")
-
-        if len(module_pool) < combo_size:
-            self.logger.warning(f"Less than {combo_size} modules, unable to form valid combinations.")
-            return []
-
-        all_solutions = []
-        total_combinations = math.comb(len(module_pool), combo_size)
-        self.logger.info(f"Total combinations to evaluate: {total_combinations}")
-
-        if progress_callback:
-            progress_callback(f"Evaluating {total_combinations} combinations...")
-
-        count = 0
-        for combo in itertools.combinations(module_pool, combo_size):
-            combo_list = list(combo)
-            fitness = calculate_fitness(combo_list, category, prioritized_attrs, combo_size)
-            if fitness > 0:  # Only include valid combinations
-                solution = ModuleSolution(modules=combo_list, optimization_score=fitness)
-                solution.score, solution.attr_breakdown = self.calculate_combat_power(solution.modules)
-                all_solutions.append(solution)
+        # Generate a cache key based on category and combo_size
+        cache_key = (category.value, combo_size)
+        
+        # If we don't have this combination cached yet, compute all combinations
+        if cache_key not in self.all_solutions_cache:
+            module_pool = modules if category == ModuleCategory.All else [m for m in modules if self.get_module_category(m) == category]
             
-            count += 1
-            if count % 1000 == 0 and progress_callback:
-                progress_callback(f"Evaluated {count}/{total_combinations} combinations...")
-
-        # Sort by optimization score descending
-        all_solutions.sort(key=lambda s: s.optimization_score, reverse=True)
+            if len(module_pool) < combo_size:
+                self.logger.warning(f"Less than {combo_size} modules, unable to form valid combinations.")
+                return []
+            
+            all_solutions = []
+            total_combinations = math.comb(len(module_pool), combo_size)
+            self.logger.info(f"Total combinations to evaluate: {total_combinations}")
+            
+            if progress_callback:
+                progress_callback(f"Computing all {total_combinations} combinations (this may take a while)...")
+            
+            count = 0
+            for combo in itertools.combinations(module_pool, combo_size):
+                combo_list = list(combo)
+                fitness = calculate_fitness(combo_list, category, None, combo_size)  # Don't filter by attrs yet
+                if fitness > 0:  # Only include valid combinations
+                    solution = ModuleSolution(modules=combo_list, optimization_score=fitness)
+                    solution.score, solution.attr_breakdown = self.calculate_combat_power(solution.modules)
+                    all_solutions.append(solution)
+                
+                count += 1
+                if count % 5000 == 0 and progress_callback:
+                    progress_callback(f"Computed {count}/{total_combinations} combinations...")
+            
+            # Sort by optimization score descending
+            all_solutions.sort(key=lambda s: s.optimization_score, reverse=True)
+            
+            # Cache the results
+            self.all_solutions_cache[cache_key] = all_solutions
+            
+            self.logger.info(f"All combinations computed and cached. Found {len(all_solutions)} valid combinations.")
+            if progress_callback:
+                progress_callback(f"Cached {len(all_solutions)} combinations. Now filtering by attributes...")
         
-        self.logger.info(f"All combinations evaluated. Found {len(all_solutions)} valid combinations.")
+        # Retrieve cached results
+        all_solutions = self.all_solutions_cache[cache_key]
+        
+        # Now filter by prioritized attributes if specified
+        if prioritized_attrs:
+            self.logger.info(f"Filtering cached combinations by prioritized attributes: {prioritized_attrs}")
+            prioritized_set = set(prioritized_attrs)
+            filtered_solutions = []
+            
+            for solution in all_solutions:
+                # Check if solution has at least one of the prioritized attributes
+                if any(attr_name in solution.attr_breakdown for attr_name in prioritized_attrs):
+                    filtered_solutions.append(solution)
+            
+            self.logger.info(f"Filtered results: {len(filtered_solutions)} combinations contain at least one prioritized attribute")
+            if progress_callback:
+                progress_callback(f"Filtered to {len(filtered_solutions)} combinations with prioritized attributes")
+            
+            return filtered_solutions
+        
         if progress_callback:
-            progress_callback(f"Completed! Found {len(all_solutions)} valid combinations.")
+            progress_callback(f"Completed! Using all {len(all_solutions)} cached combinations.")
         
         return all_solutions
