@@ -110,26 +110,13 @@ class StarResonanceMonitor:
         logger.info(f"Target Category: {target_category} (from input '{category}')")
         
         try:
-            solutions = self.module_optimizer.get_optimal_solutions(
-                self.captured_modules,
-                target_category,
-                top_n=20,
-                prioritized_attrs=prioritized_attrs if priority_order_mode else attributes, # Pass prioritized_attrs for ordering
-                priority_order_mode=priority_order_mode,
-                progress_callback=self.progress_callback
-            )
-
-            if self.on_results_callback and solutions:
-                self.on_results_callback(solutions)
-            
-            num_solutions = len(solutions)
-            for i, solution in enumerate(reversed(solutions)):
-                rank = num_solutions - i
-                self.module_optimizer.print_solution_details(solution, rank)
+            # Do not perform optimization here, just notify that modules are captured
+            if self.on_results_callback:
+                self.on_results_callback(self.captured_modules)
         except Exception as e:
-            logger.error(f"Optimization process failed: {e}")
+            logger.error(f"Process failed: {e}")
             if self.progress_callback:
-                self.progress_callback("Optimization failed.")
+                self.progress_callback("Process failed.")
 
     def rescreen_modules(self, category: str, attributes: List[str], 
                          prioritized_attrs: Optional[List[str]] = None, priority_order_mode: bool = False):
