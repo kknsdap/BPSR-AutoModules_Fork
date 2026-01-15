@@ -698,6 +698,10 @@ class App(ctk.CTk):
         pass
 
     def update_dynamic_instruction(self):
+        # Check if instruction_text_frame exists
+        if not hasattr(self, 'instruction_text_frame'):
+            return
+        
         # Clear previous widgets
         for widget in self.instruction_text_frame.winfo_children():
             widget.destroy()
@@ -1337,7 +1341,7 @@ class App(ctk.CTk):
 
     def stop_instruction_animation(self):
         """Stops the instruction animation."""
-        if self.instruction_animation_job:
+        if hasattr(self, 'instruction_animation_job') and self.instruction_animation_job:
             self.after_cancel(self.instruction_animation_job)
             self.instruction_animation_job = None
 
@@ -1573,21 +1577,32 @@ class App(ctk.CTk):
         self.monitor_instance = None
         self.monitor_thread = None
 
-        self.start_button.configure(state="normal")
-        self.stop_button.configure(state="disabled")
-        self.interface_menu.configure(state="normal")
-        self.category_menu.configure(state="normal") # Category menu should be enabled after stopping
-        self.rescreen_button.configure(state="disabled")
-        self.status_label.configure(text="Status: Idle")
-        self.dist_filter_frame.grid_remove() # Hide distribution filter
-        self.stop_instruction_animation()
-
-        # Reset instruction label to initial state
-        self.instruction_label_simple.pack_forget()
-        self.update_dynamic_instruction() # Re-create the initial instruction in the correct language
-        self.instruction_text_frame.pack(side="left", padx=(0, 10), pady=5)
-        self.instruction_icon.configure(text="⚠️", text_color="#FFCC00") # Yellow warning
-        self.instruction_frame.grid()
+        if hasattr(self, 'start_button'):
+            self.start_button.configure(state="normal")
+        if hasattr(self, 'stop_button'):
+            self.stop_button.configure(state="disabled")
+        if hasattr(self, 'interface_menu'):
+            self.interface_menu.configure(state="normal")
+        if hasattr(self, 'category_menu'):
+            self.category_menu.configure(state="normal")
+        if hasattr(self, 'rescreen_button'):
+            self.rescreen_button.configure(state="disabled")
+        if hasattr(self, 'status_label'):
+            self.status_label.configure(text="Status: Idle")
+        if hasattr(self, 'dist_filter_frame'):
+            self.dist_filter_frame.grid_remove()
+        if hasattr(self, 'instruction_label_simple'):
+            self.instruction_label_simple.pack_forget()
+        if hasattr(self, 'update_dynamic_instruction'):
+            self.update_dynamic_instruction()
+        if hasattr(self, 'instruction_text_frame'):
+            self.instruction_text_frame.pack(side="left", padx=(0, 10), pady=5)
+        if hasattr(self, 'instruction_icon'):
+            self.instruction_icon.configure(text="⚠️", text_color="#FFCC00")
+        if hasattr(self, 'instruction_frame'):
+            self.instruction_frame.grid()
+        if hasattr(self, 'stop_instruction_animation'):
+            self.stop_instruction_animation()
 
     def rescreen_results(self):
         """Rescreens existing data"""
@@ -1697,7 +1712,10 @@ class App(ctk.CTk):
             self.stop_animation()
         
     def on_closing(self):
-        self.stop_monitoring()
+        try:
+            self.stop_monitoring()
+        except Exception as e:
+            logging.error(f"Error during stop_monitoring: {e}")
         self.destroy()
 
 if __name__ == "__main__":
