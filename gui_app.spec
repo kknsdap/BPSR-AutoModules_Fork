@@ -11,6 +11,7 @@ datas = [
     (os.path.join(project_root, 'Icons'), 'Icons'),
     (os.path.join(project_root, 'Module-Effects'), 'Module-Effects'),
     (os.path.join(project_root, 'Modulos'), 'Modulos'),
+    (os.path.join(project_root, 'icon.png'), '.'),
 ]
 
 # If you have an .ico file for the exe, include it by filename here (optional)
@@ -53,7 +54,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=True,
     icon=icon_file,
 )
 
