@@ -521,6 +521,8 @@ class ModuleOptimizer:
         """
         Optimizes modules and returns a list of solutions instead of printing them.
         If all_combinations is True, generates and evaluates all possible combinations.
+        When all_combinations is True, uses multiple combo sizes (1, 2, 3, 4) to include
+        Rare (1 part), Epic (2 parts), and Legendary (3 parts) modules together.
         """
         separator = f"\n{'='*50}"
         print(separator); self._log_result(separator)
@@ -529,7 +531,8 @@ class ModuleOptimizer:
         print(separator); self._log_result(separator)
         
         if all_combinations:
-            optimal_solutions = self.get_all_combinations(modules, category, prioritized_attrs, combo_size, progress_callback)
+            # Use multi-size combinations to include all rarities
+            optimal_solutions = self.get_all_combinations_multi_size(modules, category, prioritized_attrs, progress_callback)
         else:
             optimal_solutions = self.optimize_modules(modules, category, top_n, prioritized_attrs, priority_order_mode, progress_callback)
 
@@ -618,3 +621,89 @@ class ModuleOptimizer:
             progress_callback(f"Completed! Using all {len(all_solutions)} cached combinations.")
         
         return all_solutions
+
+    def get_all_combinations_multi_size(self, modules: List[ModuleInfo], category: ModuleCategory,
+                                        prioritized_attrs: Optional[List[str]] = None,
+                                        progress_callback: Optional[Callable[[str], None]] = None) -> List[ModuleSolution]:
+        """
+        Generate and evaluate all possible combinations of multiple sizes (1, 2, 3, 4).
+        This ensures that Rare (1 part), Epic (2 parts), and Legendary (3 parts) modules are all included.
+        """
+        self.logger.info(f"Generating all possible combinations for {category.value} type modules with multiple sizes")
+        
+        module_pool = modules if category == ModuleCategory.All else [m for m in modules if self.get_module_category(m) == category]
+        
+        all_combined_solutions = []
+        combo_sizes = [1, 2, 3, 4]  # Include combinations of all sizes
+        total_all_sizes = 0
+        
+        # First pass: calculate total combinations for progress
+        for combo_size in combo_sizes:
+            if len(module_pool) >= combo_size:
+                total_all_sizes += math.comb(len(module_pool), combo_size)
+        
+        if progress_callback:
+            progress_callback(f"Computing all combinations across multiple sizes (total: {total_all_sizes})...")
+        
+        # Second pass: compute combinations for each size
+        processed_count = 0
+        for combo_size in combo_sizes:
+            if len(module_pool) < combo_size:
+                self.logger.info(f"Skipping combo size {combo_size}: not enough modules")
+                continue
+            
+            cache_key = (category.value, combo_size)
+            
+            # If not cached, compute this size's combinations
+            if cache_key not in self.all_solutions_cache:
+                size_solutions = []
+                total_combinations_for_size = math.comb(len(module_pool), combo_size)
+                
+                self.logger.info(f"Computing combinations of size {combo_size}: {total_combinations_for_size} total")
+                
+                for combo in itertools.combinations(module_pool, combo_size):
+                    combo_list = list(combo)
+                    fitness = calculate_fitness(combo_list, category, None, combo_size)
+                    if fitness > 0:
+                        solution = ModuleSolution(modules=combo_list, optimization_score=fitness)
+                        solution.score, solution.attr_breakdown = self.calculate_combat_power(solution.modules)
+                        size_solutions.append(solution)
+                    
+                    processed_count += 1
+                    if processed_count % 10000 == 0 and progress_callback:
+                        progress_callback(f"Computed {processed_count}/{total_all_sizes} combinations...")
+                
+                # Sort this size's solutions
+                size_solutions.sort(key=lambda s: s.optimization_score, reverse=True)
+                self.all_solutions_cache[cache_key] = size_solutions
+                self.logger.info(f"Cached {len(size_solutions)} valid combinations of size {combo_size}")
+                
+                all_combined_solutions.extend(size_solutions)
+            else:
+                # Retrieve from cache
+                all_combined_solutions.extend(self.all_solutions_cache[cache_key])
+                self.logger.info(f"Retrieved {len(self.all_solutions_cache[cache_key])} cached combinations of size {combo_size}")
+        
+        # Sort all solutions by optimization score
+        all_combined_solutions.sort(key=lambda s: s.optimization_score, reverse=True)
+        
+        # Filter by prioritized attributes if specified
+        if prioritized_attrs:
+            self.logger.info(f"Filtering combined combinations by prioritized attributes: {prioritized_attrs}")
+            filtered_solutions = []
+            
+            for solution in all_combined_solutions:
+                if any(attr_name in solution.attr_breakdown for attr_name in prioritized_attrs):
+                    filtered_solutions.append(solution)
+            
+            self.logger.info(f"Filtered results: {len(filtered_solutions)} combinations contain prioritized attributes")
+            if progress_callback:
+                progress_callback(f"Filtered to {len(filtered_solutions)} combinations with prioritized attributes")
+            
+            return filtered_solutions
+        
+        self.logger.info(f"All combinations computed. Found {len(all_combined_solutions)} valid combinations across all sizes.")
+        if progress_callback:
+            progress_callback(f"Completed! Found {len(all_combined_solutions)} combinations across all sizes.")
+        
+        return all_combined_solutions
